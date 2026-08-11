@@ -8,13 +8,13 @@ merge_queue:
 commands_restrictions:
   queue:
     conditions:
-      - sender = leynier
+      - sender = rmarticedeno
   dequeue:
     conditions:
-      - sender = leynier
+      - sender = rmarticedeno
   requeue:
     conditions:
-      - sender = leynier
+      - sender = rmarticedeno
 
 queue_rules:
   - name: default
@@ -31,7 +31,7 @@ queue_rules:
       - -conflict
       - check-success = @github-actions/pr-ready
       - or:
-          - '-files ~= ^(cloud/|edge/|infra/|tool/cloud/|\.github/workflows/(cloud-deploy|cloud)\.yml$)'
+          - '-files ~= ^(cloud/|edge/|infra/|tool/cloud/|\.github/workflows/cloud\.yml$)'
           - check-success = @github-actions/cloud-ready
       - or:
           - '-files ~= ^(landing/|\.github/workflows/landing\.yml$)'
@@ -40,7 +40,7 @@ queue_rules:
       - check-success = @github-actions/pr-ready
       - check-success = @github-actions/queue-ready
       - or:
-          - '-files ~= ^(cloud/|edge/|infra/|tool/cloud/|\.github/workflows/(cloud-deploy|cloud)\.yml$)'
+          - '-files ~= ^(cloud/|edge/|infra/|tool/cloud/|\.github/workflows/cloud\.yml$)'
           - check-success = @github-actions/cloud-ready
       - or:
           - '-files ~= ^(landing/|\.github/workflows/landing\.yml$)'

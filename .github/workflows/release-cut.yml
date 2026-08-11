@@ -17,7 +17,7 @@ on:
         type: string
         default: main
       dry_run:
-        description: Compute the next version without tagging or publishing
+        description: Compute the next version without building or publishing
         required: false
         type: boolean
         default: false
@@ -31,10 +31,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  ALERA_UPDATE_BASE_URL: https://updates.alera.build
-  ALERA_R2_BUCKET: alera-updates
-  ALERA_STABLE_RELEASES_TO_KEEP: 5
-  ALERA_RC_RELEASES_TO_KEEP: 3
   ALERA_FLAVOR: release
 
 jobs:
@@ -45,30 +41,22 @@ jobs:
       target_sha: ${{ steps.release_plan.outputs.target_sha }}
       channel: ${{ steps.release_plan.outputs.channel }}
       any_should_release: ${{ steps.release_plan.outputs.any_should_release }}
-      desktop_has_changes: ${{ steps.release_plan.outputs.desktop_has_changes }}
       desktop_should_release: ${{ steps.release_plan.outputs.desktop_should_release }}
-      desktop_bump: ${{ steps.release_plan.outputs.desktop_bump }}
       desktop_artifact_version: ${{ steps.release_plan.outputs.desktop_artifact_version }}
       desktop_release_version: ${{ steps.release_plan.outputs.desktop_release_version }}
       desktop_build_number: ${{ steps.release_plan.outputs.desktop_build_number }}
       desktop_tag: ${{ steps.release_plan.outputs.desktop_tag }}
-      desktop_previous_tag: ${{ steps.release_plan.outputs.desktop_previous_tag }}
-      mobile_has_changes: ${{ steps.release_plan.outputs.mobile_has_changes }}
       mobile_should_release: ${{ steps.release_plan.outputs.mobile_should_release }}
-      mobile_bump: ${{ steps.release_plan.outputs.mobile_bump }}
       mobile_artifact_version: ${{ steps.release_plan.outputs.mobile_artifact_version }}
       mobile_release_version: ${{ steps.release_plan.outputs.mobile_release_version }}
       mobile_build_number: ${{ steps.release_plan.outputs.mobile_build_number }}
       mobile_tag: ${{ steps.release_plan.outputs.mobile_tag }}
-      mobile_previous_tag: ${{ steps.release_plan.outputs.mobile_previous_tag }}
     steps:
       - name: Checkout ref
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
-          # release_plan.dart only reads git history and the pubspec files, so
-          # this job resolves no dependencies and needs no submodule.
           submodules: false
 
       - name: Setup Dart
@@ -93,499 +81,75 @@ jobs:
             --github-output "$GITHUB_OUTPUT" \
             --summary "$GITHUB_STEP_SUMMARY"
 
-  build_desktop_app:
+  build_windows_x64:
+    name: build windows x64
     needs: plan
     if: needs.plan.outputs.desktop_should_release == 'true'
-    name: build app ${{ matrix.platform }}
+    runs-on: windows-latest
     timeout-minutes: 75
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: macos
-            os: macos-latest
-            native_arch: arm64
-          - platform: windows
-            os: windows-latest
-            native_arch: x64
-          - platform: linux
-            os: ubuntu-latest
-            native_arch: x64
-    runs-on: ${{ matrix.os }}
-    env:
-      ALERA_SCCACHE_R2_ACCOUNT_ID: ${{ vars.SCCACHE_R2_ACCOUNT_ID }}
-      ALERA_SCCACHE_R2_BUCKET: ${{ vars.SCCACHE_R2_BUCKET }}
-      ALERA_SCCACHE_R2_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_ACCESS_KEY_ID }}
-      ALERA_SCCACHE_R2_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_SECRET_ACCESS_KEY }}
     steps:
       - name: Checkout release ref
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           ref: ${{ needs.plan.outputs.target_sha }}
           submodules: false
+
+      - name: Require x64 runner
+        shell: pwsh
+        run: |
+          if ($env:RUNNER_ARCH -ne 'X64') {
+            throw "Expected an X64 runner, got $env:RUNNER_ARCH."
+          }
 
       - name: Setup Flutter workspace
         uses: ./.github/actions/setup-flutter-workspace
         with:
           rust: 'true'
-          extra-linux-packages: rpm
 
       - name: Tune Windows build environment
-        if: runner.os == 'Windows'
         uses: ./.github/actions/tune-windows-build
-
-      - name: Restore cargokit build
-        uses: actions/cache/restore@v6
-        with:
-          path: |
-            build/**/cargokit_build
-            build/**/ck
-          key: cargokit-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust/Cargo.lock') }}-
-          restore-keys: |
-            cargokit-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust/Cargo.lock') }}-
-            cargokit-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Apply release version locally
         run: dart tool/release/update_pubspec_version.dart "${{ needs.plan.outputs.desktop_artifact_version }}" "${{ needs.plan.outputs.desktop_build_number }}"
 
-      - name: Build release bundle
-        shell: bash
-        env:
-          PLATFORM: ${{ matrix.platform }}
-          CHANNEL: ${{ needs.plan.outputs.channel }}
-          BASE_URL: ${{ env.ALERA_UPDATE_BASE_URL }}
-          RELEASE_PAGE_URL: https://github.com/${{ github.repository }}/releases/tag/${{ needs.plan.outputs.desktop_tag }}
-          ALERA_UPDATE_MANIFEST_PRIVATE_KEY: ${{ secrets.ALERA_UPDATE_MANIFEST_PRIVATE_KEY }}
-          ALERA_UPDATE_MANIFEST_PUBLIC_KEY: ${{ secrets.ALERA_UPDATE_MANIFEST_PUBLIC_KEY }}
-          ALERA_UPDATE_MANIFEST_PUBLIC_KEY_ID: ${{ vars.ALERA_UPDATE_MANIFEST_PUBLIC_KEY_ID }}
-          ALERA_LINUX_GPG_PRIVATE_KEY_BASE64: ${{ secrets.ALERA_LINUX_GPG_PRIVATE_KEY_BASE64 }}
-          ALERA_LINUX_GPG_KEY_ID: ${{ secrets.ALERA_LINUX_GPG_KEY_ID }}
-          APPLE_DEVELOPER_ID_APPLICATION: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION }}
-          APPLE_DEVELOPER_ID_TEAM_ID: ${{ secrets.APPLE_DEVELOPER_ID_TEAM_ID }}
-          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          WINDOWS_CERTIFICATE_PFX_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_PFX_BASE64 }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-          WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
-        run: |
-          set -euo pipefail
-          runtime_archive_file="runtime-archive.json"
-          if [[ "$CHANNEL" == "rc" ]]; then
-            runtime_archive_file="runtime-archive-rc.json"
-          fi
-          for name in \
-            ALERA_UPDATE_MANIFEST_PRIVATE_KEY \
-            ALERA_UPDATE_MANIFEST_PUBLIC_KEY \
-            ALERA_UPDATE_MANIFEST_PUBLIC_KEY_ID; do
-            if [[ -z "${!name:-}" ]]; then
-              echo "::error::$name is required for signed release builds." >&2
-              exit 64
-            fi
-          done
-          archive_url="${BASE_URL}/updates/${CHANNEL}/app-archive.json"
-          update_base_url="${BASE_URL}/updates/${CHANNEL}"
-          runtime_archive_url="https://github.com/${{ github.repository }}/releases/download/${{ needs.plan.outputs.desktop_tag }}/${runtime_archive_file}"
-          # Auto-install is enabled on every platform. Whether it may run is
-          # decided at runtime, not per platform: Alera never replaces an
-          # installation a package manager owns, and on Linux it also refuses a
-          # directory it cannot write. A deb or rpm install is therefore still
-          # upgraded through apt or dnf, while a tarball install replaces its
-          # own directory, which runs no dpkg transaction and so needs no
-          # dependency resolution.
-          #
-          # It deliberately does not depend on Authenticode or Developer ID
-          # signing. Update integrity comes from the Ed25519-signed manifest,
-          # which carries a SHA-256 and a byte size for every artifact and is
-          # verified before anything is staged. Platform signing governs what
-          # the OS shows on first launch, not whether an update can be trusted
-          # in transit, so withholding auto-install until a certificate exists
-          # only left users on older builds.
-          auto_install_enabled=true
-          dart run desktop_updater:release publish \
-            --platform "$PLATFORM" \
-            --base-url "$update_base_url" \
-            --output "pages/updates/$CHANNEL" \
-            --channel "$CHANNEL" \
-            --version "${{ needs.plan.outputs.desktop_release_version }}" \
-            --build-number "${{ needs.plan.outputs.desktop_build_number }}" \
-            --package-id dev.leynier.alera \
-            --app-name Alera \
-            --dart-define="ALERA_FLAVOR=release" \
-            --dart-define="ALERA_UPDATE_CHANNEL=$CHANNEL" \
-            --dart-define="ALERA_UPDATE_ARCHIVE_URL=$archive_url" \
-            --dart-define="ALERA_RUNTIME_ARCHIVE_URL=$runtime_archive_url" \
-            --dart-define="ALERA_RUNTIME_VERSION=${{ needs.plan.outputs.desktop_release_version }}" \
-            --dart-define="ALERA_RELEASE_PAGE_URL=$RELEASE_PAGE_URL" \
-            --dart-define="ALERA_UPDATE_AUTO_INSTALL_ENABLED=$auto_install_enabled" \
-            --dart-define="ALERA_SIGNED_RELEASE=true" \
-            --dart-define="ALERA_UPDATE_MANIFEST_PUBLIC_KEY_ID=$ALERA_UPDATE_MANIFEST_PUBLIC_KEY_ID" \
-            --dart-define="ALERA_UPDATE_MANIFEST_PUBLIC_KEY=$ALERA_UPDATE_MANIFEST_PUBLIC_KEY"
+      - name: Build Windows release
+        run: flutter build windows --release --dart-define=ALERA_FLAVOR=release
 
-      - name: Prepare release artifact directories
+      - name: Verify Windows bundle
         shell: bash
-        env:
-          PLATFORM: ${{ matrix.platform }}
-          CHANNEL: ${{ needs.plan.outputs.channel }}
         run: |
           set -euo pipefail
-          case "$PLATFORM" in
-            macos)
-              bundle_dir="build/macos/Build/Products/Release"
-              ;;
-            windows)
-              bundle_dir="build/windows/x64/runner/Release"
-              ;;
-            linux)
-              bundle_dir="build/linux/x64/release/bundle"
-              ;;
-            *)
-              echo "::error::Unsupported desktop platform: $PLATFORM"
-              exit 64
-              ;;
-          esac
-          if [[ ! -d "$bundle_dir" ]]; then
-            echo "::error::Missing release bundle $bundle_dir"
-            find build -maxdepth 6 -type d -print || true
-            exit 1
-          fi
-          index="pages/updates/$CHANNEL/app-archive.json"
-          test -s "$index" || { echo "::error::Missing updater index $index"; exit 1; }
-          mkdir -p pages/update-index-fragments release-assets
-          mv "$index" "pages/update-index-fragments/$PLATFORM.json"
-          rm -f "pages/updates/$CHANNEL/.desktop_updater_publish.json"
-          echo "BUNDLE_DIR=$bundle_dir" >>"$GITHUB_ENV"
-
-      - name: Verify bundled helper and video runtimes
-        shell: bash
-        env:
-          PLATFORM: ${{ matrix.platform }}
-        run: |
-          set -euo pipefail
+          bundle="build/windows/x64/runner/Release"
+          test -d "$bundle" || { echo "::error::Missing Windows x64 bundle at $bundle"; exit 1; }
           dart tool/native_helpers/verify_desktop_runtime_bundle.dart \
-            --platform "$PLATFORM" \
-            --bundle "$BUNDLE_DIR"
+            --platform windows \
+            --bundle "$bundle"
 
-      - name: Stage native runtime input
-        shell: bash
-        env:
-          PLATFORM: ${{ matrix.platform }}
-          NATIVE_ARCH: ${{ matrix.native_arch }}
-        run: |
-          set -euo pipefail
-          bin_name="alera"
-          if [[ "$PLATFORM" == "windows" ]]; then
-            bin_name="alera.exe"
-          fi
-          case "$PLATFORM" in
-            macos)
-              expected_runner_arch="ARM64"
-              runtime_root="$BUNDLE_DIR/Alera.app/Contents/Resources/alera"
-              ;;
-            windows)
-              expected_runner_arch="X64"
-              runtime_root="$BUNDLE_DIR/resources/alera"
-              ;;
-            linux)
-              expected_runner_arch="X64"
-              runtime_root="$BUNDLE_DIR/resources/alera"
-              ;;
-            *)
-              echo "::error::Unsupported native runtime platform: $PLATFORM"
-              exit 64
-              ;;
-          esac
-          if [[ "$RUNNER_ARCH" != "$expected_runner_arch" ]]; then
-            echo "::error::Expected $PLATFORM runner architecture $expected_runner_arch, got $RUNNER_ARCH."
-            exit 1
-          fi
-          test -s "$runtime_root/$bin_name" || {
-            echo "::error::Missing bundled runtime binary at $runtime_root/$bin_name"
-            exit 1
-          }
-          dart tool/native_helpers/verify_native_helper_bundle.dart \
-            --platform "$PLATFORM" \
-            --emulator-root "$runtime_root/emulator"
-
-          input_root="runtime-native-input/$PLATFORM/$NATIVE_ARCH"
-          mkdir -p "$input_root"
-          cp "$runtime_root/$bin_name" "$input_root/$bin_name"
-          cp -R "$runtime_root/emulator" "$input_root/emulator"
-          tar -czf "runtime-native-${PLATFORM}-${NATIVE_ARCH}.tar.gz" \
-            -C runtime-native-input "$PLATFORM"
-
-      - name: Verify macOS ships arm64 only
-        if: matrix.platform == 'macos'
-        shell: bash
-        run: bash tool/release/verify_macos_arm64_only.sh "$BUNDLE_DIR/Alera.app"
-
-      - name: Package macOS release asset
-        if: matrix.platform == 'macos'
-        shell: bash
-        env:
-          RELEASE_VERSION: ${{ needs.plan.outputs.desktop_release_version }}
-        run: |
-          set -euo pipefail
-          dart tool/native_helpers/verify_desktop_runtime_bundle.dart \
-            --platform macos \
-            --bundle "$BUNDLE_DIR"
-          # Only the app, never the directory that contains it. BUNDLE_DIR is
-          # the Xcode products root on macOS (it is the runnable bundle itself
-          # on Windows and Linux), so archiving `.` shipped every dSYM, every
-          # per-pod build product and a loose copy of each framework alongside
-          # Alera.app: 450 MB published where the app is 271 MB.
-          # COPYFILE_DISABLE keeps macOS tar from adding its `._*` AppleDouble
-          # files for the xattrs Xcode leaves behind.
-          asset="release-assets/alera-${RELEASE_VERSION}-macos.tar.gz"
-          COPYFILE_DISABLE=1 tar -czf "$asset" -C "$BUNDLE_DIR" Alera.app
-          roots="$(tar -tzf "$asset" | awk -F/ '{print $1}' | sort -u)"
-          if [[ "$roots" != "Alera.app" ]]; then
-            echo "::error::macOS asset must contain only Alera.app, got: $roots"
-            exit 1
-          fi
-
-      - name: Package Windows release assets
-        if: matrix.platform == 'windows'
+      - name: Package Windows x64 assets
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ needs.plan.outputs.desktop_release_version }}
         run: |
-          tar -czf "release-assets/alera-$env:RELEASE_VERSION-windows.tar.gz" -C "$env:BUNDLE_DIR" .
-          # Chocolatey and Scoop both unpack a zip natively.
-          Compress-Archive -Path "$env:BUNDLE_DIR\*" `
-            -DestinationPath "release-assets/alera-$env:RELEASE_VERSION-windows.zip"
-
-      - name: Package Linux release
-        if: matrix.platform == 'linux'
-        shell: bash
-        env:
-          RELEASE_VERSION: ${{ needs.plan.outputs.desktop_release_version }}
-          ARTIFACT_VERSION: ${{ needs.plan.outputs.desktop_artifact_version }}
-          BUILD_NUMBER: ${{ needs.plan.outputs.desktop_build_number }}
-        run: |
-          set -euo pipefail
-          bash tool/release/package_linux.sh "$BUNDLE_DIR" release-assets "$RELEASE_VERSION" "$ARTIFACT_VERSION" "$BUILD_NUMBER"
-          # The unmanaged install path. Distributions outside the deb and rpm
-          # families have no package to install, and only a directory Alera
-          # owns can be replaced in place by the updater.
-          tar -czf "release-assets/alera-${RELEASE_VERSION}-linux-x64.tar.gz" \
-            -C "$BUNDLE_DIR" .
-
-      - name: Upload updater artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: updater-${{ matrix.platform }}
-          path: pages/
-          retention-days: 1
-          if-no-files-found: error
-
-      - name: Upload release asset artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: release-${{ matrix.platform }}
-          path: release-assets/
-          retention-days: 1
-          if-no-files-found: error
-
-      - name: Upload native runtime input
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: runtime-native-${{ matrix.platform }}-${{ matrix.native_arch }}
-          path: runtime-native-${{ matrix.platform }}-${{ matrix.native_arch }}.tar.gz
-          retention-days: 1
-          if-no-files-found: error
-
-      - name: Report sccache statistics
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          {
-            echo "### sccache ${{ matrix.platform }}"
-            echo '```text'
-            sccache --show-stats || true
-            echo '```'
-          } | tee -a "$GITHUB_STEP_SUMMARY"
-
-  build_runtime_cross:
-    needs: plan
-    if: needs.plan.outputs.desktop_should_release == 'true'
-    name: build runtime ${{ matrix.platform }} ${{ matrix.arch }}
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: macos
-            arch: x64
-            target: x86_64-apple-darwin
-            os: macos-latest
-            binary: alera
-          - platform: windows
-            arch: arm64
-            target: aarch64-pc-windows-msvc
-            os: windows-latest
-            binary: alera.exe
-          - platform: linux
-            arch: arm64
-            target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            binary: alera
-    runs-on: ${{ matrix.os }}
-    env:
-      ALERA_SCCACHE_R2_ACCOUNT_ID: ${{ vars.SCCACHE_R2_ACCOUNT_ID }}
-      ALERA_SCCACHE_R2_BUCKET: ${{ vars.SCCACHE_R2_BUCKET }}
-      ALERA_SCCACHE_R2_ACCESS_KEY_ID: ${{ secrets.SCCACHE_R2_ACCESS_KEY_ID }}
-      ALERA_SCCACHE_R2_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_R2_SECRET_ACCESS_KEY }}
-    steps:
-      - name: Checkout release ref
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with:
-          ref: ${{ needs.plan.outputs.target_sha }}
-          submodules: false
-
-      - name: Install Linux cross compiler
-        if: matrix.platform == 'linux'
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-
-      - name: Tune Windows build environment
-        if: runner.os == 'Windows'
-        uses: ./.github/actions/tune-windows-build
-
-      - name: Setup Rust and sccache
-        uses: ./.github/actions/setup-rust-sccache
-
-      - name: Install Rust target
-        run: rustup target add "${{ matrix.target }}"
-
-      - name: Build cross-architecture runtime
-        shell: bash
-        env:
-          RUST_TARGET: ${{ matrix.target }}
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-        run: |
-          set -euo pipefail
-          cargo build \
-            --manifest-path rust/Cargo.toml \
-            --locked \
-            -p alera-cli \
-            --release \
-            --target "$RUST_TARGET"
-
-      - name: Stage cross-architecture runtime
-        shell: bash
-        env:
-          PLATFORM: ${{ matrix.platform }}
-          ARCH: ${{ matrix.arch }}
-          RUST_TARGET: ${{ matrix.target }}
-          BINARY_NAME: ${{ matrix.binary }}
-        run: |
-          set -euo pipefail
-          binary_path="rust/target/$RUST_TARGET/release/$BINARY_NAME"
-          test -s "$binary_path" || {
-            echo "::error::Missing cross-architecture runtime at $binary_path"
-            exit 1
+          $bundle = 'build/windows/x64/runner/Release'
+          $assets = 'windows-release-assets'
+          $zip = "$assets/alera-$env:RELEASE_VERSION-windows-x64.zip"
+          $archive = "$assets/alera-$env:RELEASE_VERSION-windows-x64.tar.gz"
+          New-Item -ItemType Directory -Force -Path $assets | Out-Null
+          Compress-Archive -Path "$bundle/*" -DestinationPath $zip
+          tar -czf $archive -C $bundle .
+          foreach ($asset in @($zip, $archive)) {
+            $hash = (Get-FileHash -Algorithm SHA256 -Path $asset).Hash.ToLowerInvariant()
+            $name = Split-Path -Leaf $asset
+            Set-Content -Path "$asset.sha256" -Value "$hash  $name" -Encoding ascii
           }
-          input_root="runtime-cross-input/$PLATFORM/$ARCH"
-          mkdir -p "$input_root"
-          cp "$binary_path" "$input_root/$BINARY_NAME"
-          tar -czf "runtime-cross-${PLATFORM}-${ARCH}.tar.gz" \
-            -C runtime-cross-input "$PLATFORM"
 
-      - name: Upload cross-architecture runtime
+      - name: Upload Windows x64 assets
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: runtime-cross-${{ matrix.platform }}-${{ matrix.arch }}
-          path: runtime-cross-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
-          retention-days: 1
+          name: windows-x64-release-assets
+          path: windows-release-assets
           if-no-files-found: error
-
-      - name: Report sccache statistics
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          {
-            echo "### sccache ${{ matrix.platform }} ${{ matrix.arch }}"
-            echo '```text'
-            sccache --show-stats || true
-            echo '```'
-          } | tee -a "$GITHUB_STEP_SUMMARY"
-
-  package_runtime:
-    needs:
-      - plan
-      - build_desktop_app
-      - build_runtime_cross
-    if: >-
-      !cancelled() &&
-      needs.plan.outputs.desktop_should_release == 'true' &&
-      needs.build_desktop_app.result == 'success' &&
-      needs.build_runtime_cross.result == 'success'
-    name: package runtimes
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Checkout release ref
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with:
-          ref: ${{ needs.plan.outputs.target_sha }}
-          submodules: false
-
-      - name: Setup Flutter workspace
-        uses: ./.github/actions/setup-flutter-workspace
-        with:
-          linux-toolchain: 'false'
-          native-assets: 'false'
-          preflight: 'false'
-
-      - name: Download runtime inputs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          pattern: runtime-*
-          path: runtime-input-artifacts
-          merge-multiple: true
-
-      - name: Extract runtime inputs
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p runtime-inputs
-          mapfile -t archives < <(find runtime-input-artifacts -type f -name '*.tar.gz' -print | sort)
-          if [[ "${#archives[@]}" -ne 6 ]]; then
-            echo "::error::Expected 6 runtime input archives, found ${#archives[@]}."
-            printf '%s\n' "${archives[@]}"
-            exit 1
-          fi
-          for archive in "${archives[@]}"; do
-            tar -xzf "$archive" -C runtime-inputs
-          done
-
-      - name: Package standalone runtimes
-        env:
-          RELEASE_VERSION: ${{ needs.plan.outputs.desktop_release_version }}
-        run: >-
-          dart tool/release/package_runtime_sidecars.dart
-          --version "$RELEASE_VERSION"
-          --input runtime-inputs
-          --output release-assets
-
-      - name: Verify runtime checksums
-        working-directory: release-assets
-        run: sha256sum -c ./*.sha256
-
-      - name: Upload runtime release assets
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: release-runtime
-          path: release-assets/
-          retention-days: 1
-          if-no-files-found: error
+          retention-days: 7
 
   build_android:
     name: build android
@@ -612,788 +176,114 @@ jobs:
       - name: Apply mobile release version locally
         run: dart tool/release/update_mobile_pubspec_version.dart "${{ needs.plan.outputs.mobile_artifact_version }}" "${{ needs.plan.outputs.mobile_build_number }}"
 
-      - name: Analyze mobile app
+      - name: Build debug-signed Android release APKs
         working-directory: mobile
-        run: flutter analyze
-
-      - name: Test mobile app
-        working-directory: mobile
-        run: flutter test
-
-      - name: Decode Android signing keystore
-        shell: bash
-        env:
-          ALERA_ANDROID_KEYSTORE_BASE64: ${{ secrets.ALERA_ANDROID_KEYSTORE_BASE64 }}
-          ALERA_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ALERA_ANDROID_KEYSTORE_PASSWORD }}
-          ALERA_ANDROID_KEY_ALIAS: ${{ secrets.ALERA_ANDROID_KEY_ALIAS }}
-          ALERA_ANDROID_KEY_PASSWORD: ${{ secrets.ALERA_ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          # Unlike desktop platforms, an Android APK signed with an ephemeral
-          # debug key silently breaks in-place updates for every installed user,
-          # so the release keystore is mandatory here, not warning-only.
-          for var in ALERA_ANDROID_KEYSTORE_BASE64 ALERA_ANDROID_KEYSTORE_PASSWORD ALERA_ANDROID_KEY_ALIAS ALERA_ANDROID_KEY_PASSWORD; do
-            if [[ -z "${!var:-}" ]]; then
-              echo "::error::$var is not configured. Android releases must be signed with the stable release keystore; see docs/release-trust.md."
-              exit 1
-            fi
-          done
-          keystore_path="$RUNNER_TEMP/alera-upload.keystore"
-          echo "$ALERA_ANDROID_KEYSTORE_BASE64" | base64 -d > "$keystore_path"
-          chmod 600 "$keystore_path"
-          cat > mobile/android/key.properties <<EOF
-          storePassword=$ALERA_ANDROID_KEYSTORE_PASSWORD
-          keyPassword=$ALERA_ANDROID_KEY_PASSWORD
-          keyAlias=$ALERA_ANDROID_KEY_ALIAS
-          storeFile=$keystore_path
-          EOF
-          echo "ALERA_ANDROID_KEYSTORE=$keystore_path" >> "$GITHUB_ENV"
-
-      - name: Build Android release APKs
-        working-directory: mobile
-        env:
-          ALERA_FIREBASE_API_KEY: ${{ vars.ALERA_FIREBASE_API_KEY }}
-          ALERA_FIREBASE_APP_ID: ${{ vars.ALERA_FIREBASE_APP_ID }}
-          ALERA_FIREBASE_MESSAGING_SENDER_ID: ${{ vars.ALERA_FIREBASE_MESSAGING_SENDER_ID }}
-          ALERA_FIREBASE_PROJECT_ID: ${{ vars.ALERA_FIREBASE_PROJECT_ID }}
-        run: |
-          set -euo pipefail
-          for var in ALERA_FIREBASE_API_KEY ALERA_FIREBASE_APP_ID ALERA_FIREBASE_MESSAGING_SENDER_ID ALERA_FIREBASE_PROJECT_ID; do
-            if [[ -z "${!var:-}" ]]; then
-              echo "::error::$var is not configured. Android releases require the production Firebase client configuration; see docs/cloud-setup.md."
-              exit 1
-            fi
-          done
-          firebase_defines=(
-            --dart-define "ALERA_FIREBASE_API_KEY=$ALERA_FIREBASE_API_KEY"
-            --dart-define "ALERA_FIREBASE_APP_ID=$ALERA_FIREBASE_APP_ID"
-            --dart-define "ALERA_FIREBASE_MESSAGING_SENDER_ID=$ALERA_FIREBASE_MESSAGING_SENDER_ID"
-            --dart-define "ALERA_FIREBASE_PROJECT_ID=$ALERA_FIREBASE_PROJECT_ID"
-          )
-          flutter build apk --release "${firebase_defines[@]}"
-          flutter build apk --release --split-per-abi "${firebase_defines[@]}"
+          test ! -f android/key.properties || { echo "::error::Secret-backed Android signing is not supported by this fork workflow."; exit 1; }
+          flutter build apk --release
+          flutter build apk --release --split-per-abi
 
       - name: Verify Android APK signatures
         shell: bash
         run: |
           set -euo pipefail
           apksigner="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)"
+          test -n "$apksigner" || { echo "::error::Could not find apksigner"; exit 1; }
           for apk in mobile/build/app/outputs/flutter-apk/*-release.apk; do
-            "$apksigner" verify --print-certs "$apk" | tee /tmp/apk-cert.txt
-            grep -q "certificate SHA-256 digest" /tmp/apk-cert.txt
+            "$apksigner" verify --print-certs "$apk"
           done
 
-      - name: Stage and verify Android release assets
+      - name: Stage Android assets
         shell: bash
         env:
           RELEASE_VERSION: ${{ needs.plan.outputs.mobile_release_version }}
         run: |
           set -euo pipefail
           source_dir="mobile/build/app/outputs/flutter-apk"
-          mkdir -p mobile-release-assets
-          cp "$source_dir/app-release.apk" "mobile-release-assets/alera-${RELEASE_VERSION}-android.apk"
-          cp "$source_dir/app-arm64-v8a-release.apk" "mobile-release-assets/alera-${RELEASE_VERSION}-android-arm64-v8a.apk"
-          cp "$source_dir/app-armeabi-v7a-release.apk" "mobile-release-assets/alera-${RELEASE_VERSION}-android-armeabi-v7a.apk"
-          cp "$source_dir/app-x86_64-release.apk" "mobile-release-assets/alera-${RELEASE_VERSION}-android-x86_64.apk"
-
-          for asset in mobile-release-assets/*.apk; do
-            asset_name="$(basename "$asset")"
-            (cd mobile-release-assets && sha256sum "$asset_name" >"${asset_name}.sha256")
+          assets="android-release-assets"
+          mkdir -p "$assets"
+          cp "$source_dir/app-release.apk" "$assets/alera-${RELEASE_VERSION}-android.apk"
+          cp "$source_dir/app-arm64-v8a-release.apk" "$assets/alera-${RELEASE_VERSION}-android-arm64-v8a.apk"
+          cp "$source_dir/app-armeabi-v7a-release.apk" "$assets/alera-${RELEASE_VERSION}-android-armeabi-v7a.apk"
+          cp "$source_dir/app-x86_64-release.apk" "$assets/alera-${RELEASE_VERSION}-android-x86_64.apk"
+          for asset in "$assets"/*.apk; do
+            name="$(basename "$asset")"
+            (cd "$assets" && sha256sum "$name" >"$name.sha256")
           done
-          (cd mobile-release-assets && sha256sum -c ./*.sha256)
+          (cd "$assets" && sha256sum -c ./*.sha256)
 
-      - name: Upload Android release assets
+      - name: Upload Android assets
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: mobile-android-release-assets
-          path: mobile-release-assets
+          name: android-release-assets
+          path: android-release-assets
           if-no-files-found: error
           retention-days: 7
 
   publish:
+    name: publish github releases
     needs:
       - plan
-      - build_desktop_app
-      - package_runtime
+      - build_windows_x64
       - build_android
     if: >-
-      !cancelled() &&
+      always() &&
       needs.plan.outputs.any_should_release == 'true' &&
-      (needs.plan.outputs.desktop_should_release != 'true' ||
-        (needs.build_desktop_app.result == 'success' && needs.package_runtime.result == 'success')) &&
-      (needs.plan.outputs.mobile_should_release != 'true' || needs.build_android.result == 'success')
-    permissions:
-      contents: write
-      id-token: write
-      attestations: write
+      (needs.build_windows_x64.result == 'success' || needs.build_windows_x64.result == 'skipped') &&
+      (needs.build_android.result == 'success' || needs.build_android.result == 'skipped')
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with:
-          ref: ${{ needs.plan.outputs.target_sha }}
-          fetch-depth: 0
-          submodules: false
-
-      - name: Setup Dart
-        uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
-
-      - name: Setup Flutter workspace
-        if: needs.plan.outputs.desktop_should_release == 'true'
-        uses: ./.github/actions/setup-flutter-workspace
-        with:
-          linux-toolchain: 'false'
-          native-assets: 'false'
-          preflight: 'false'
-
-      - name: Configure git author
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - name: Download updater artifacts
-        if: needs.plan.outputs.desktop_should_release == 'true'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          pattern: updater-*
-          path: public
-          merge-multiple: true
-
       - name: Download release assets
-        if: needs.plan.outputs.desktop_should_release == 'true'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          pattern: release-*
+          pattern: '*-release-assets'
           path: release-assets
-          merge-multiple: true
 
-      - name: Download Android release assets
-        if: needs.plan.outputs.mobile_should_release == 'true'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          name: mobile-android-release-assets
-          path: mobile-release-assets
-
-      - name: Verify complete mobile release
-        if: needs.plan.outputs.mobile_should_release == 'true'
+      - name: Verify selected release assets
         shell: bash
         env:
-          RELEASE_VERSION: ${{ needs.plan.outputs.mobile_release_version }}
+          DESKTOP_SHOULD_RELEASE: ${{ needs.plan.outputs.desktop_should_release }}
+          MOBILE_SHOULD_RELEASE: ${{ needs.plan.outputs.mobile_should_release }}
         run: |
           set -euo pipefail
-          expected=(
-            "alera-${RELEASE_VERSION}-android.apk"
-            "alera-${RELEASE_VERSION}-android-arm64-v8a.apk"
-            "alera-${RELEASE_VERSION}-android-armeabi-v7a.apk"
-            "alera-${RELEASE_VERSION}-android-x86_64.apk"
-          )
-          for asset in "${expected[@]}"; do
-            test -s "mobile-release-assets/$asset" || { echo "::error::Missing $asset"; exit 1; }
-            test -s "mobile-release-assets/$asset.sha256" || { echo "::error::Missing $asset.sha256"; exit 1; }
-          done
-          actual_count="$(find mobile-release-assets -maxdepth 1 -type f | wc -l)"
-          if [[ "$actual_count" -ne 8 ]]; then
-            echo "::error::Expected 8 mobile release files, found $actual_count."
-            find mobile-release-assets -maxdepth 1 -type f -print
-            exit 1
+          if [[ "$DESKTOP_SHOULD_RELEASE" == "true" ]]; then
+            test "$(find release-assets/windows-x64-release-assets -maxdepth 1 -type f | wc -l)" -eq 4
+            (cd release-assets/windows-x64-release-assets && sha256sum -c ./*.sha256)
           fi
-          (cd mobile-release-assets && sha256sum -c ./*.sha256)
-
-      - name: Install Linux repository tools
-        if: needs.plan.outputs.desktop_should_release == 'true' && needs.plan.outputs.channel == 'stable'
-        run: sudo apt-get update && sudo apt-get install -y apt-utils createrepo-c
-
-      - name: Merge and verify desktop update channel
-        if: needs.plan.outputs.desktop_should_release == 'true'
-        env:
-          ALERA_RELEASE_CHANNEL: ${{ needs.plan.outputs.channel }}
-          ALERA_RELEASE_VERSION: ${{ needs.plan.outputs.desktop_release_version }}
-          ALERA_RELEASE_BUILD_NUMBER: ${{ needs.plan.outputs.desktop_build_number }}
-          ALERA_UPDATE_MANIFEST_PUBLIC_KEY: ${{ secrets.ALERA_UPDATE_MANIFEST_PUBLIC_KEY }}
-          ALERA_UPDATE_MANIFEST_PUBLIC_KEY_ID: ${{ vars.ALERA_UPDATE_MANIFEST_PUBLIC_KEY_ID }}
-        run: |
-          set -euo pipefail
-          archive_file="public/updates/${ALERA_RELEASE_CHANNEL}/app-archive.json"
-          dart tool/release/merge_desktop_update_indexes.dart \
-            public/update-index-fragments \
-            "$archive_file"
-          dart tool/release/verify_desktop_update_channel.dart \
-            public \
-            "$archive_file"
-          rm -rf public/update-index-fragments
-          echo "ALERA_ARCHIVE_FILE=updates/${ALERA_RELEASE_CHANNEL}/app-archive.json" >>"$GITHUB_ENV"
-
-      - name: Generate and verify runtime archive
-        if: needs.plan.outputs.desktop_should_release == 'true'
-        env:
-          CHANNEL: ${{ needs.plan.outputs.channel }}
-          ALERA_RELEASE_VERSION: ${{ needs.plan.outputs.desktop_release_version }}
-          ALERA_RELEASE_BUILD_NUMBER: ${{ needs.plan.outputs.desktop_build_number }}
-          ALERA_RELEASE_CHANNEL: ${{ needs.plan.outputs.channel }}
-          ALERA_RELEASE_ASSETS_DIR: release-assets
-          ALERA_RUNTIME_RELEASE_BASE_URL: https://github.com/${{ github.repository }}/releases/download/${{ needs.plan.outputs.desktop_tag }}
-          ALERA_UPDATE_MANIFEST_PRIVATE_KEY: ${{ secrets.ALERA_UPDATE_MANIFEST_PRIVATE_KEY }}
-          ALERA_UPDATE_MANIFEST_PUBLIC_KEY: ${{ secrets.ALERA_UPDATE_MANIFEST_PUBLIC_KEY }}
-          ALERA_UPDATE_MANIFEST_PUBLIC_KEY_ID: ${{ vars.ALERA_UPDATE_MANIFEST_PUBLIC_KEY_ID }}
-        run: |
-          runtime_archive_file="runtime-archive.json"
-          if [[ "$CHANNEL" == "rc" ]]; then
-            runtime_archive_file="runtime-archive-rc.json"
+          if [[ "$MOBILE_SHOULD_RELEASE" == "true" ]]; then
+            test "$(find release-assets/android-release-assets -maxdepth 1 -type f | wc -l)" -eq 8
+            (cd release-assets/android-release-assets && sha256sum -c ./*.sha256)
           fi
-          dart tool/release/build_runtime_archive.dart "public/$runtime_archive_file"
-          dart tool/release/sign_app_archive.dart "public/$runtime_archive_file"
-          dart tool/release/verify_runtime_archive.dart "public/$runtime_archive_file"
-          echo "ALERA_RUNTIME_ARCHIVE_FILE=$runtime_archive_file" >>"$GITHUB_ENV"
 
-      - name: Build signed Linux package repositories
-        if: needs.plan.outputs.desktop_should_release == 'true' && needs.plan.outputs.channel == 'stable'
+      - name: Publish permanent GitHub Releases
+        shell: bash
         env:
-          ALERA_LINUX_GPG_PRIVATE_KEY_BASE64: ${{ secrets.ALERA_LINUX_GPG_PRIVATE_KEY_BASE64 }}
-          ALERA_LINUX_GPG_KEY_ID: ${{ secrets.ALERA_LINUX_GPG_KEY_ID }}
-        run: bash tool/release/build_linux_repositories.sh public release-assets
-
-      - name: Ensure AWS CLI
-        if: needs.plan.outputs.desktop_should_release == 'true'
-        run: |
-          set -euo pipefail
-          if ! command -v aws >/dev/null 2>&1; then
-            python3 -m pip install --user awscli
-            echo "$HOME/.local/bin" >>"$GITHUB_PATH"
-            export PATH="$HOME/.local/bin:$PATH"
-          fi
-          aws --version
-
-      - name: Verify R2 deployment prerequisites
-        if: needs.plan.outputs.desktop_should_release == 'true'
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          R2_ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
-        run: |
-          set -euo pipefail
-          test -n "${AWS_ACCESS_KEY_ID:-}" || { echo "::error::R2_ACCESS_KEY_ID secret is missing."; exit 1; }
-          test -n "${AWS_SECRET_ACCESS_KEY:-}" || { echo "::error::R2_SECRET_ACCESS_KEY secret is missing."; exit 1; }
-          test -n "${CLOUDFLARE_ACCOUNT_ID:-}" || { echo "::error::CLOUDFLARE_ACCOUNT_ID secret is missing."; exit 1; }
-          aws s3 ls "s3://${ALERA_R2_BUCKET}" --endpoint-url "$R2_ENDPOINT" >/dev/null
-
-      - name: Create release commit and tags
-        id: release_commit
-        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ needs.plan.outputs.target_sha }}
           CHANNEL: ${{ needs.plan.outputs.channel }}
           DESKTOP_SHOULD_RELEASE: ${{ needs.plan.outputs.desktop_should_release }}
-          DESKTOP_TAG: ${{ needs.plan.outputs.desktop_tag }}
-          DESKTOP_ARTIFACT_VERSION: ${{ needs.plan.outputs.desktop_artifact_version }}
           DESKTOP_RELEASE_VERSION: ${{ needs.plan.outputs.desktop_release_version }}
-          DESKTOP_BUILD_NUMBER: ${{ needs.plan.outputs.desktop_build_number }}
+          DESKTOP_TAG: ${{ needs.plan.outputs.desktop_tag }}
           MOBILE_SHOULD_RELEASE: ${{ needs.plan.outputs.mobile_should_release }}
-          MOBILE_TAG: ${{ needs.plan.outputs.mobile_tag }}
-          MOBILE_ARTIFACT_VERSION: ${{ needs.plan.outputs.mobile_artifact_version }}
           MOBILE_RELEASE_VERSION: ${{ needs.plan.outputs.mobile_release_version }}
-          MOBILE_BUILD_NUMBER: ${{ needs.plan.outputs.mobile_build_number }}
-        run: |
-          set -euo pipefail
-          git fetch origin main --tags --quiet
-          tags=()
-          landing_args=()
-          if [[ "$DESKTOP_SHOULD_RELEASE" == "true" ]]; then
-            tags+=("$DESKTOP_TAG")
-            dart tool/release/update_pubspec_version.dart "$DESKTOP_ARTIFACT_VERSION" "$DESKTOP_BUILD_NUMBER"
-            git add pubspec.yaml
-            landing_args+=(--desktop-version "$DESKTOP_RELEASE_VERSION" --desktop-tag "$DESKTOP_TAG")
-          fi
-          if [[ "$MOBILE_SHOULD_RELEASE" == "true" ]]; then
-            tags+=("$MOBILE_TAG")
-            dart tool/release/update_mobile_pubspec_version.dart "$MOBILE_ARTIFACT_VERSION" "$MOBILE_BUILD_NUMBER"
-            git add mobile/pubspec.yaml
-            landing_args+=(--mobile-version "$MOBILE_RELEASE_VERSION" --mobile-tag "$MOBILE_TAG")
-          fi
-          # The landing links straight at the assets this cut publishes, so the
-          # pin has to travel in the same commit as the version bump. Only
-          # stable moves it: the download page is not where an rc belongs.
-          if [[ "$CHANNEL" == "stable" ]]; then
-            dart tool/release/update_landing_release_links.dart "${landing_args[@]}"
-            git add landing/src/data/releases.json
-          fi
-          for tag in "${tags[@]}"; do
-            if git rev-parse "$tag" >/dev/null 2>&1; then
-              echo "::error::Tag $tag already exists."
-              exit 1
-            fi
-          done
-          if git diff --cached --quiet; then
-            echo "::error::Release plan did not change a pubspec version."
-            exit 1
-          fi
-          git commit -m "release: ${tags[*]}"
-          for tag in "${tags[@]}"; do
-            git tag -a "$tag" -m "$tag"
-          done
-          echo "release_sha=$(git rev-parse HEAD)" >>"$GITHUB_OUTPUT"
-
-      - name: Push release refs
-        id: push_refs
-        env:
-          DESKTOP_SHOULD_RELEASE: ${{ needs.plan.outputs.desktop_should_release }}
-          DESKTOP_TAG: ${{ needs.plan.outputs.desktop_tag }}
-          MOBILE_SHOULD_RELEASE: ${{ needs.plan.outputs.mobile_should_release }}
           MOBILE_TAG: ${{ needs.plan.outputs.mobile_tag }}
         run: |
           set -euo pipefail
-          tag_refspecs=()
+          release_args=(--repo "$GITHUB_REPOSITORY" --target "$TARGET_SHA" --generate-notes)
+          if [[ "$CHANNEL" == "rc" ]]; then
+            release_args+=(--prerelease)
+          fi
           if [[ "$DESKTOP_SHOULD_RELEASE" == "true" ]]; then
-            tag_refspecs+=("refs/tags/$DESKTOP_TAG")
+            gh release create "$DESKTOP_TAG" \
+              release-assets/windows-x64-release-assets/* \
+              "${release_args[@]}" \
+              --title "Alera $DESKTOP_RELEASE_VERSION"
           fi
           if [[ "$MOBILE_SHOULD_RELEASE" == "true" ]]; then
-            tag_refspecs+=("refs/tags/$MOBILE_TAG")
+            gh release create "$MOBILE_TAG" \
+              release-assets/android-release-assets/* \
+              "${release_args[@]}" \
+              --title "Alera Mobile $MOBILE_RELEASE_VERSION"
           fi
-          pushed_main=false
-          current_sha="$(git rev-parse HEAD~1)"
-          main_sha="$(git rev-parse origin/main)"
-          if [[ "$current_sha" == "$main_sha" ]]; then
-            git push --atomic origin "HEAD:refs/heads/main" "${tag_refspecs[@]}"
-            pushed_main=true
-          else
-            echo "::notice::Release ref is not current origin/main; only the tag will be pushed."
-            git push --atomic origin "${tag_refspecs[@]}"
-          fi
-          echo "pushed_main=$pushed_main" >>"$GITHUB_OUTPUT"
-
-      - name: Create draft desktop release
-        if: needs.plan.outputs.desktop_should_release == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.plan.outputs.desktop_tag }}
-          PREVIOUS_TAG: ${{ needs.plan.outputs.desktop_previous_tag }}
-        run: |
-          set -euo pipefail
-          notes_args=(
-            --scope desktop
-            --repo "$GITHUB_REPOSITORY"
-            --tag "$TAG"
-            --target "${{ steps.release_commit.outputs.release_sha }}"
-            --output desktop-release-notes.md
-          )
-          if [[ -n "$PREVIOUS_TAG" ]]; then
-            notes_args+=(--previous-tag "$PREVIOUS_TAG")
-          fi
-          dart tool/release/generate_release_notes.dart "${notes_args[@]}"
-
-          gh release create "$TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --draft \
-            --target "${{ steps.release_commit.outputs.release_sha }}" \
-            --title "$TAG" \
-            --notes-file desktop-release-notes.md
-
-      - name: Create draft mobile release
-        if: needs.plan.outputs.mobile_should_release == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.plan.outputs.mobile_tag }}
-          PREVIOUS_TAG: ${{ needs.plan.outputs.mobile_previous_tag }}
-        run: |
-          set -euo pipefail
-          notes_args=(
-            --scope mobile
-            --repo "$GITHUB_REPOSITORY"
-            --tag "$TAG"
-            --target "${{ steps.release_commit.outputs.release_sha }}"
-            --output mobile-release-notes.md
-          )
-          if [[ -n "$PREVIOUS_TAG" ]]; then
-            notes_args+=(--previous-tag "$PREVIOUS_TAG")
-          fi
-          dart tool/release/generate_release_notes.dart "${notes_args[@]}"
-
-          gh release create "$TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --draft \
-            --target "${{ steps.release_commit.outputs.release_sha }}" \
-            --title "$TAG" \
-            --notes-file mobile-release-notes.md
-
-      - name: Upload desktop release assets
-        if: needs.plan.outputs.desktop_should_release == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.plan.outputs.desktop_tag }}
-        run: |
-          bash tool/release/upload_release_assets.sh \
-            "$TAG" \
-            "$GITHUB_REPOSITORY" \
-            release-assets/* \
-            "public/$ALERA_ARCHIVE_FILE" \
-            "public/$ALERA_RUNTIME_ARCHIVE_FILE"
-
-      - name: Upload mobile release assets
-        if: needs.plan.outputs.mobile_should_release == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.plan.outputs.mobile_tag }}
-        run: |
-          bash tool/release/upload_release_assets.sh \
-            "$TAG" \
-            "$GITHUB_REPOSITORY" \
-            mobile-release-assets/*
-
-      - name: Attest desktop release assets
-        if: needs.plan.outputs.desktop_should_release == 'true'
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
-        with:
-          subject-path: |
-            release-assets/*
-            public/${{ env.ALERA_ARCHIVE_FILE }}
-            public/${{ env.ALERA_RUNTIME_ARCHIVE_FILE }}
-
-      - name: Attest mobile release assets
-        if: needs.plan.outputs.mobile_should_release == 'true'
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
-        with:
-          subject-path: mobile-release-assets/*
-
-      - name: Publish mobile release
-        if: needs.plan.outputs.mobile_should_release == 'true'
-        id: publish_mobile_release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.plan.outputs.mobile_tag }}
-          CHANNEL: ${{ needs.plan.outputs.channel }}
-        run: |
-          prerelease=false
-          if [[ "$CHANNEL" == "rc" ]]; then
-            prerelease=true
-          fi
-          gh release edit "$TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --draft=false \
-            --prerelease="$prerelease" \
-            --latest=false
-
-      - name: Publish desktop release
-        if: needs.plan.outputs.desktop_should_release == 'true'
-        id: publish_desktop_release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.plan.outputs.desktop_tag }}
-          CHANNEL: ${{ needs.plan.outputs.channel }}
-        run: |
-          prerelease=false
-          latest_args=()
-          if [[ "$CHANNEL" == "rc" ]]; then
-            prerelease=true
-          else
-            latest_args+=(--latest=true)
-          fi
-          gh release edit "$TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --draft=false \
-            --prerelease="$prerelease" \
-            "${latest_args[@]}"
-
-      - name: Publish update archive to R2
-        if: needs.plan.outputs.desktop_should_release == 'true'
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          R2_ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
-          CHANNEL: ${{ needs.plan.outputs.channel }}
-        run: |
-          set -euo pipefail
-          aws s3 sync public/updates "s3://${ALERA_R2_BUCKET}/updates" \
-            --endpoint-url "$R2_ENDPOINT" \
-            --exclude "*/app-archive.json" \
-            --cache-control "public, max-age=31536000, immutable"
-          aws s3 cp "public/updates/${CHANNEL}/app-archive.json" \
-            "s3://${ALERA_R2_BUCKET}/updates/${CHANNEL}/app-archive.json" \
-            --endpoint-url "$R2_ENDPOINT" \
-            --cache-control "no-cache"
-          if [[ "$CHANNEL" == "stable" ]]; then
-            aws s3 sync public/linux "s3://${ALERA_R2_BUCKET}/linux" \
-              --endpoint-url "$R2_ENDPOINT" \
-              --cache-control "public, max-age=300"
-          fi
-          for legacy_archive in app-archive.json app-archive-rc.json; do
-            aws s3 rm "s3://${ALERA_R2_BUCKET}/${legacy_archive}" \
-              --endpoint-url "$R2_ENDPOINT"
-          done
-
-      - name: Cleanup old R2 desktop updates
-        if: needs.plan.outputs.desktop_should_release == 'true'
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          R2_ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
-          CURRENT_VERSION: ${{ needs.plan.outputs.desktop_release_version }}
-        run: |
-          set -euo pipefail
-
-          cleanup_channel() {
-            local channel="$1"
-            local keep_count="$2"
-            local channel_listing="$RUNNER_TEMP/alera-r2-${channel}-listing.txt"
-            local versions_file="$RUNNER_TEMP/alera-r2-${channel}-versions.txt"
-            local retained_file="$RUNNER_TEMP/alera-r2-${channel}-retained.txt"
-
-            if aws s3 ls "s3://${ALERA_R2_BUCKET}/updates/${channel}/" \
-              --endpoint-url "$R2_ENDPOINT" >"$channel_listing"; then
-              while IFS= read -r legacy_prefix; do
-                [[ -n "$legacy_prefix" ]] || continue
-                [[ "$legacy_prefix" == "releases" ]] && continue
-                aws s3 rm \
-                  "s3://${ALERA_R2_BUCKET}/updates/${channel}/${legacy_prefix}" \
-                  --endpoint-url "$R2_ENDPOINT" \
-                  --recursive
-              done < <(awk '$1 == "PRE" { sub(/\/$/, "", $2); print $2 }' "$channel_listing")
-            else
-              : >"$channel_listing"
-            fi
-
-            if aws s3 ls \
-              "s3://${ALERA_R2_BUCKET}/updates/${channel}/releases/" \
-              --endpoint-url "$R2_ENDPOINT" >"$channel_listing"; then
-              awk '$1 == "PRE" { sub(/\/$/, "", $2); print $2 }' \
-                "$channel_listing" \
-                | sort -V >"$versions_file"
-            else
-              : >"$versions_file"
-            fi
-            {
-              tail -n "$keep_count" "$versions_file"
-              echo "$CURRENT_VERSION"
-            } | sort -u >"$retained_file"
-
-            while IFS= read -r version; do
-              [[ -n "$version" ]] || continue
-              if grep -Fxq "$version" "$retained_file"; then
-                continue
-              fi
-              aws s3 rm \
-                "s3://${ALERA_R2_BUCKET}/updates/${channel}/releases/${version}" \
-                --endpoint-url "$R2_ENDPOINT" \
-                --recursive
-            done <"$versions_file"
-          }
-
-          cleanup_channel stable "$ALERA_STABLE_RELEASES_TO_KEEP"
-          cleanup_channel rc "$ALERA_RC_RELEASES_TO_KEEP"
-
-      - name: Cleanup unpublished release refs on failure
-        if: failure() && steps.push_refs.outcome == 'success'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DESKTOP_SHOULD_RELEASE: ${{ needs.plan.outputs.desktop_should_release }}
-          DESKTOP_TAG: ${{ needs.plan.outputs.desktop_tag }}
-          DESKTOP_PUBLISHED: ${{ steps.publish_desktop_release.outcome == 'success' }}
-          MOBILE_SHOULD_RELEASE: ${{ needs.plan.outputs.mobile_should_release }}
-          MOBILE_TAG: ${{ needs.plan.outputs.mobile_tag }}
-          MOBILE_PUBLISHED: ${{ steps.publish_mobile_release.outcome == 'success' }}
-          PUSHED_MAIN: ${{ steps.push_refs.outputs.pushed_main }}
-        run: |
-          set +e
-          delete_unpublished_release() {
-            local tag="$1"
-            local max_attempts=3
-            for ((attempt = 1; attempt <= max_attempts; attempt++)); do
-              if gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes; then
-                return 0
-              fi
-              if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-                echo "::notice::Release $tag is already absent."
-                return 0
-              fi
-              if ((attempt < max_attempts)); then
-                echo "::warning::Failed to delete release $tag on attempt $attempt; retrying."
-                sleep "$((attempt * 2))"
-              fi
-            done
-            echo "::error::Failed to delete unpublished release $tag after $max_attempts attempts." >&2
-            return 1
-          }
-
-          cleanup_failed=false
-          delete_refspecs=()
-          if [[ "$DESKTOP_SHOULD_RELEASE" == "true" && "$DESKTOP_PUBLISHED" != "true" ]]; then
-            delete_unpublished_release "$DESKTOP_TAG" || cleanup_failed=true
-            delete_refspecs+=(":refs/tags/$DESKTOP_TAG")
-          fi
-          if [[ "$MOBILE_SHOULD_RELEASE" == "true" && "$MOBILE_PUBLISHED" != "true" ]]; then
-            delete_unpublished_release "$MOBILE_TAG" || cleanup_failed=true
-            delete_refspecs+=(":refs/tags/$MOBILE_TAG")
-          fi
-          if ((${#delete_refspecs[@]} > 0)); then
-            git push --atomic origin "${delete_refspecs[@]}"
-          fi
-          if [[ "$PUSHED_MAIN" == "true" && "$DESKTOP_PUBLISHED" != "true" && "$MOBILE_PUBLISHED" != "true" ]]; then
-            git push --force-with-lease origin HEAD~1:refs/heads/main
-          fi
-          if [[ "$cleanup_failed" == "true" ]]; then
-            exit 1
-          fi
-
-  # The desktop packages are downstream of a release that is already public:
-  # they only ever point at assets `publish` uploaded, so they run after it and
-  # a failure here never rolls the release back. Release candidates are excluded
-  # for the same reason the Linux stable repositories exclude them.
-  publish_packages:
-    name: publish brew and scoop
-    needs:
-      - plan
-      - publish
-    if: >-
-      needs.plan.outputs.desktop_should_release == 'true' &&
-      needs.plan.outputs.channel == 'stable'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Checkout release ref
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with:
-          ref: ${{ needs.plan.outputs.target_sha }}
-          submodules: false
-
-      - name: Setup Dart
-        uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
-
-      - name: Download release assets
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          pattern: release-*
-          path: release-assets
-          merge-multiple: true
-
-      - name: Render package manifests
-        env:
-          RELEASE_VERSION: ${{ needs.plan.outputs.desktop_release_version }}
-          TAG: ${{ needs.plan.outputs.desktop_tag }}
-        run: |
-          set -euo pipefail
-          macos_asset="release-assets/alera-${RELEASE_VERSION}-macos.tar.gz"
-          windows_asset="release-assets/alera-${RELEASE_VERSION}-windows.zip"
-          for asset in "$macos_asset" "$windows_asset"; do
-            test -s "$asset" || { echo "::error::Missing $asset"; exit 1; }
-          done
-          # The checksums are read from the very files the release carries, so a
-          # package can never advertise a digest for something else.
-          dart tool/release/render_package_manifests.dart \
-            --version "$RELEASE_VERSION" \
-            --tag "$TAG" \
-            --macos-sha256 "$(sha256sum "$macos_asset" | cut -d' ' -f1)" \
-            --windows-sha256 "$(sha256sum "$windows_asset" | cut -d' ' -f1)" \
-            --out packaging-out
-
-      - name: Publish the Homebrew cask and the Scoop manifest
-        env:
-          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.ALERA_HOMEBREW_TAP_DEPLOY_KEY }}
-          SCOOP_BUCKET_DEPLOY_KEY: ${{ secrets.ALERA_SCOOP_BUCKET_DEPLOY_KEY }}
-          RELEASE_VERSION: ${{ needs.plan.outputs.desktop_release_version }}
-        run: |
-          set -euo pipefail
-          # Pin GitHub's SSH host keys from an endpoint TLS already authenticates
-          # rather than trusting the first connection. A runner that accepted a
-          # forged host key would push the manifest somewhere else and still
-          # report success, which is the failure nobody would notice.
-          mkdir -p ~/.ssh
-          curl -fsSL https://api.github.com/meta |
-            python3 -c 'import json,sys; print("\n".join(f"github.com {k}" for k in json.load(sys.stdin)["ssh_keys"]))' \
-            >>~/.ssh/known_hosts
-
-          # Each repository gets its own deploy key rather than one account-wide
-          # token, so a key that leaks or needs rotating reaches nothing else.
-          publish_manifest() {
-            local repository="$1" key_value="$2" rendered="$3" destination="$4"
-            if [[ -z "$key_value" ]]; then
-              echo "::warning::No deploy key is configured for $repository; skipping it."
-              return 0
-            fi
-            local key_file checkout
-            key_file="$(mktemp)"
-            chmod 600 "$key_file"
-            printf '%s\n' "$key_value" >"$key_file"
-            checkout="$(mktemp -d)"
-            GIT_SSH_COMMAND="ssh -i $key_file -o IdentitiesOnly=yes" \
-              git clone --depth 1 "git@github.com:${repository}.git" "$checkout"
-            mkdir -p "$checkout/$(dirname "$destination")"
-            cp "$rendered" "$checkout/$destination"
-            git -C "$checkout" config user.name "github-actions[bot]"
-            git -C "$checkout" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git -C "$checkout" add "$destination"
-            if git -C "$checkout" diff --cached --quiet; then
-              echo "$repository already carries Alera $RELEASE_VERSION"
-              rm -f "$key_file"
-              return 0
-            fi
-            git -C "$checkout" commit -m "alera $RELEASE_VERSION"
-            GIT_SSH_COMMAND="ssh -i $key_file -o IdentitiesOnly=yes" \
-              git -C "$checkout" push
-            rm -f "$key_file"
-          }
-          publish_manifest leynier/homebrew-tap "${HOMEBREW_TAP_DEPLOY_KEY:-}" \
-            packaging-out/homebrew/Casks/alera.rb Casks/alera.rb
-          publish_manifest leynier/scoop-bucket "${SCOOP_BUCKET_DEPLOY_KEY:-}" \
-            packaging-out/scoop/bucket/alera.json bucket/alera.json
-
-      - name: Upload the Chocolatey package source
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: chocolatey-package
-          path: packaging-out/chocolatey/
-          retention-days: 1
-          if-no-files-found: error
-
-  # `choco pack` and `choco push` only run on a Windows runner in a supported
-  # configuration, so this is deliberately a second job rather than a step.
-  publish_chocolatey:
-    name: publish chocolatey
-    needs:
-      - plan
-      - publish_packages
-    if: >-
-      needs.plan.outputs.desktop_should_release == 'true' &&
-      needs.plan.outputs.channel == 'stable'
-    runs-on: windows-latest
-    timeout-minutes: 15
-    steps:
-      - name: Download the Chocolatey package source
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          name: chocolatey-package
-          path: chocolatey
-
-      - name: Pack and push the Chocolatey package
-        shell: pwsh
-        env:
-          CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
-          RELEASE_VERSION: ${{ needs.plan.outputs.desktop_release_version }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:CHOCOLATEY_API_KEY)) {
-            Write-Output "::warning::CHOCOLATEY_API_KEY is not configured; skipping the Chocolatey push."
-            exit 0
-          }
-          $packageId = "alera"
-          $packagePageUri = "https://community.chocolatey.org/packages/$packageId"
-          $approvedFeedUri = "https://community.chocolatey.org/api/v2/Packages()?`$filter=Id%20eq%20%27$packageId%27&`$top=1"
-          try {
-            $packagePage = Invoke-WebRequest -Uri $packagePageUri -UseBasicParsing
-            $approvedFeed = Invoke-WebRequest -Uri $approvedFeedUri -UseBasicParsing
-            $pendingModeration = $packagePage.Content -match "This version is in[\s\S]*moderation[\s\S]*has not yet been approved"
-            $hasApprovedVersion = $approvedFeed.Content -match "<entry(?:\s|>)"
-            if ($pendingModeration -and -not $hasApprovedVersion) {
-              Write-Output "::warning::The first Chocolatey package version is still in moderation; skipping this version until the package has an approved version."
-              exit 0
-            }
-          } catch {
-            Write-Output "::notice::Could not inspect Chocolatey moderation state; attempting the package push."
-          }
-          choco pack chocolatey/alera.nuspec --out chocolatey
-          $package = "chocolatey/alera.$env:RELEASE_VERSION.nupkg"
-          if (-not (Test-Path $package)) {
-            Write-Output "::error::Missing $package"
-            exit 1
-          }
-          choco push $package --source https://push.chocolatey.org/ `
-            --api-key $env:CHOCOLATEY_API_KEY

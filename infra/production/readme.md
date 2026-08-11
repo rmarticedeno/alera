@@ -15,7 +15,7 @@ Neon remains an external free-tier service by design. `neon_project_id` records 
 
 ## GitHub Actions
 
-Production deploys normally through `.github/workflows/cloud-deploy.yml`. Static, non-secret values live in `production.auto.tfvars`; the workflow supplies `cloud_run_image`, `cloud_run_revision`, and the push-delivery circuit breaker explicitly. GitHub authenticates to Google through the separate WIF root in `../bootstrap/github` and uses independent Cloudflare tokens for OpenTofu and Wrangler.
+This fork does not deploy production infrastructure through GitHub Actions. Static, non-secret values live in `production.auto.tfvars`; a trusted operator must supply `cloud_run_image`, `cloud_run_revision`, and the push-delivery circuit breaker explicitly when applying a reviewed plan. Google and Cloudflare credentials remain outside the repository.
 
 The production plan is rejected when any resource action contains a delete or replacement. After apply, the workflow deploys the Worker and verifies the public and origin routes. A failed verification rolls Cloud Run and the Worker back to their captured versions.
 

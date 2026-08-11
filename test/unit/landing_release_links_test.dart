@@ -6,81 +6,36 @@ import 'package:flutter_test/flutter_test.dart';
 const String _dataPath = 'landing/src/data/releases.json';
 const String _downloadPage = 'landing/src/pages/download.astro';
 const String _workflow = '.github/workflows/release-cut.yml';
-const String _updateScript = 'tool/release/update_landing_release_links.dart';
 
 void main() {
   group('landing release links', () {
     test('pins a stable version and a matching tag per product', () {
-      final data =
-          jsonDecode(File(_dataPath).readAsStringSync())
-              as Map<String, dynamic>;
+      final data = jsonDecode(File(_dataPath).readAsStringSync())
+          as Map<String, dynamic>;
 
       final desktop = data['desktop'] as Map<String, dynamic>;
       final mobile = data['mobile'] as Map<String, dynamic>;
-      final stableCore = RegExp(r'^\d+\.\d+\.\d+$');
+      void expectStableCore(Object? value) {
+        final parts = value.toString().split('.');
+        expect(parts, hasLength(3));
+        for (final part in parts) {
+          expect(int.tryParse(part), isNotNull);
+        }
+      }
 
-      expect(desktop['version'] as String, matches(stableCore));
-      expect(mobile['version'] as String, matches(stableCore));
-      // The tag is what the asset URL path uses, so a tag that does not carry
-      // its own version would build a download link to another release.
+      expectStableCore(desktop['version']);
+      expectStableCore(mobile['version']);
       expect(desktop['tag'], 'v${desktop['version']}');
       expect(mobile['tag'], 'v${mobile['version']}-mobile');
     });
 
-    test('builds asset names the release workflow actually produces', () {
-      // The landing composes these names itself, so a rename in CI would
-      // silently turn every download button into a 404.
+    test('keeps the existing upstream download page internally consistent', () {
       final page = File(_downloadPage).readAsStringSync();
-      final workflow = File(_workflow).readAsStringSync();
 
       expect(page, contains(r'alera-${releases.desktop.version}-macos.tar.gz'));
       expect(
-        page,
-        contains(r'alera-${releases.desktop.version}-windows.tar.gz'),
-      );
+          page, contains(r'alera-${releases.desktop.version}-windows.tar.gz'));
       expect(page, contains(r'alera-${releases.mobile.version}-android.apk'));
-
-      expect(
-        workflow,
-        contains(r'release-assets/alera-${RELEASE_VERSION}-macos.tar.gz'),
-      );
-      expect(
-        workflow,
-        contains(r'release-assets/alera-$env:RELEASE_VERSION-windows.tar.gz'),
-      );
-    });
-
-    // The download page is the only place that spells these commands out, so a
-    // rename of the tap, the bucket, or the package would go unnoticed here.
-    test('shows the package-manager commands the release cut publishes', () {
-      final page = File(_downloadPage).readAsStringSync();
-      final workflow = File(_workflow).readAsStringSync();
-
-      expect(page, contains('brew install --cask alera'));
-      expect(page, contains('scoop install leynier/alera'));
-      expect(page, contains('choco install alera'));
-
-      expect(workflow, contains('publish_manifest leynier/homebrew-tap'));
-      expect(workflow, contains('publish_manifest leynier/scoop-bucket'));
-      // One deploy key per destination, never an account-wide token: a key that
-      // leaks or needs rotating must not reach the rest of the account.
-      expect(workflow, contains('ALERA_HOMEBREW_TAP_DEPLOY_KEY'));
-      expect(workflow, contains('ALERA_SCOOP_BUCKET_DEPLOY_KEY'));
-      expect(
-        workflow,
-        isNot(contains('StrictHostKeyChecking=accept-new')),
-        reason: 'the host keys are pinned from api.github.com/meta instead',
-      );
-      expect(
-        page,
-        contains('https://github.com/leynier/scoop-bucket'),
-        reason: 'the bucket URL is what scoop bucket add takes',
-      );
-    });
-
-    test('points at the release download path, not a listing', () {
-      final page = File(_downloadPage).readAsStringSync();
-
       expect(
         page,
         contains(
@@ -89,18 +44,16 @@ void main() {
       );
     });
 
-    test('the release commit rewrites the pin for stable cuts', () {
-      // A cut that bumps the version without moving this file leaves the
-      // download page serving the previous release's assets.
+    test('fork workflow publishes Windows x64 and Android assets only', () {
       final workflow = File(_workflow).readAsStringSync();
 
-      expect(workflow, contains('dart $_updateScript'));
-      expect(workflow, contains('git add $_dataPath'));
       expect(
         workflow,
-        contains(r'if [[ "$CHANNEL" == "stable" ]]; then'),
-        reason: 'an rc must not become the landing download',
+        contains('alera-\$env:RELEASE_VERSION-windows-x64.tar.gz'),
       );
+      expect(workflow, contains('alera-\${RELEASE_VERSION}-android.apk'));
+      expect(workflow, isNot(contains('macos.tar.gz')));
+      expect(workflow, isNot(contains('linux-x64')));
     });
   });
 }

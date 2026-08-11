@@ -1,63 +1,51 @@
-# Release trust
+# Release Trust
 
-Alera release builds are expected to be trusted before they are published publicly. The release workflow builds the desktop bundle for each platform, signs or packages the platform artifact, emits signed schema v3 release descriptors, and uploads both GitHub Release assets and R2 update indexes.
+The fork's manual release workflow publishes only Windows x64 archives and Android APKs to permanent GitHub Releases. It uses no repository secrets, external storage, update-index service, cloud deployment, or package-manager destination.
 
-## Platform signing is conditional
+## Release Planning
 
-Platform code-signing (macOS Developer ID, Windows Authenticode) runs only when its credentials are configured as repository secrets. When they are absent the release job logs a warning and ships an unsigned platform artifact instead of failing. This is independent of update-descriptor signing: every schema v3 `release.json` is Ed25519-signed, so update integrity holds even for unsigned platform bundles. Configuring the relevant secrets re-enables signing automatically with no workflow change.
+Desktop and mobile keep independent semantic versions and tag sequences. `tool/release/release_plan.dart` detects changes for each product, and the workflow skips any product without changes. Stable cuts create normal GitHub Releases; release candidates create prereleases.
 
-## macOS
-
-Production macOS artifacts should contain a Developer ID signed and notarized `Alera.app`. When the `APPLE_*` credentials are present, the release job signs the bundled Rust sidecar under `Contents/Resources/alera/`, signs the app bundle with hardened runtime, submits it to Apple notarization, staples the ticket, and verifies the result with `codesign`, `stapler`, and `spctl`. While Apple credentials are not configured, the macOS bundle ships unsigned and users must allow it through Gatekeeper (right-click → Open, or `xattr -dr com.apple.quarantine`).
+The workflow builds from the resolved target commit in a clean checkout. A dry run computes the next versions without building, tagging, or publishing.
 
 ## Windows
 
-Production Windows artifacts should be Authenticode signed. When the `WINDOWS_CERTIFICATE_*` credentials are present, the release job signs every executable payload in the bundle, including the Rust sidecar under `resources/alera/`, and verifies each signed file with `signtool verify /pa /all`. Windows SmartScreen reputation can still take time to accrue for a new publisher or certificate even when Authenticode verification succeeds. While the certificate is not configured, the Windows bundle ships unsigned and SmartScreen reports an unknown publisher; the planned trusted path is a free SignPath Foundation certificate for this MIT-licensed project.
+Windows builds run only on the native `windows-latest` x64 runner. The workflow verifies `RUNNER_ARCH` is `X64`, builds the Flutter desktop application and Rust sidecar, and validates the assembled helper and video runtimes before packaging.
 
-That path is not a matter of adding the two `WINDOWS_CERTIFICATE_*` secrets. Since mid-2023 the CA/Browser Forum requires code-signing private keys to live on certified hardware, so no exportable `.pfx` is available to a CI job, and SignPath keeps the key in its own HSM. Adopting it replaces the local `signtool` path in `tool/release/sign_windows.ps1` with an artifact submitted to SignPath and signed remotely, changes the `auto_install_enabled` condition in `release-cut.yml` to key on a SignPath token rather than the certificate secrets, and adds a human approval step inside the release job. The `signtool verify /pa /all` pass MUST be kept afterwards: which nested files get signed is declared in SignPath's own project configuration rather than in this repository, and that verification is what catches a bundled executable the configuration missed.
+Each desktop release contains:
 
-The attribution SignPath requires is published verbatim on the home page, on the [download page](https://alera.build/download), and in `readme.md`. Rotating or removing it is a breach of the sponsorship terms, so a test asserts it stays in all three places.
+- `alera-<version>-windows-x64.zip`
+- `alera-<version>-windows-x64.zip.sha256`
+- `alera-<version>-windows-x64.tar.gz`
+- `alera-<version>-windows-x64.tar.gz.sha256`
 
-## Linux
+The Windows bundle is not Authenticode signed. Windows SmartScreen therefore reports an unknown publisher. SHA-256 verification detects corruption but does not establish a publisher identity.
 
-Linux distribution uses `.deb` and `.rpm` packages because the system `libmpv` runtime and its dependency closure are distribution-managed. Stable release jobs publish an APT repository with signed `InRelease` / `Release.gpg` metadata and an RPM repository with signed repository metadata. Release candidates publish the same package formats as GitHub assets but never publish them to the stable package repositories. A plain `alera-<version>-linux-x64.tar.gz` is published alongside them for distributions with no package of ours. It declares no dependencies, so its user installs `libmpv`, `webkit2gtk-4.1` and `gtk3` themselves once; that is the tradeoff for an install the package repositories cannot serve. Alera never replaces a packaged installation directly: an executable resolving under `/opt/alera` is attributed to dpkg or rpm and updated through apt or dnf, so dependencies resolve before the installed application changes. Only a tarball installation is replaced in place, and only after Alera proves it can write to its own directory, because failing part way through the swap is the one outcome that leaves the user with nothing to run.
-
-The repository signing key is published next to the repositories at `https://updates.alera.build/linux/alera-archive-keyring.asc`, with fingerprint `5DE97E7CFE234A1C5869EC54708DA940734CF23A`. `tool/release/build_linux_repositories.sh` exports it from the same key that signs the metadata and fails the release when the two disagree, because a mismatch would otherwise surface only as a signature failure on a user's machine against a repository that looks healthy from CI. `landing/public/install.sh` pins that fingerprint and refuses a keyring that does not match it or that carries more than one key, since `Signed-By` trusts every key in the keyring it points at. Rotating the key means updating the pin in the installer in the same change.
-
-The published RPMs carry no per-package signature, so the generated `.repo` sets `gpgcheck=0` with `repo_gpgcheck=1`. The signed `repomd.xml` commits to the checksum of `primary.xml`, which commits to the checksum of every package, and dnf enforces both. That is the same chain APT relies on, where a signed `InRelease` commits to the hash of `Packages`, which commits to the hash of each `.deb`. Turning `gpgcheck` on before per-package signing exists would make every install fail as unsigned.
-
-The repositories publish `amd64` and `x86_64` only, and each release cut regenerates the metadata from the newest package alone, so the repositories expose exactly one version and offer no downgrade path. openSUSE is not a supported target: the spec in `tool/release/package_linux.sh` declares Fedora dependency names (`mpv-libs`, `webkit2gtk4.1`, `gtk3`) that openSUSE provides under different names, so both the updater's artifact selection and the installer refuse it rather than promising a transaction that could never resolve.
-
-## Desktop package managers
-
-macOS also ships as a Homebrew cask (`leynier/homebrew-tap`) and Windows as a Scoop manifest (`leynier/scoop-bucket`) and a Chocolatey package. All three are rendered from the templates under `packaging/` by `tool/release/render_package_manifests.dart` and published by the `publish_packages` and `publish_chocolatey` jobs, which run only on stable cuts and only after the GitHub Release is public. They add no new trust root: each manifest carries the SHA-256 of an asset on that release, computed by the same job from the very file the release uploaded, and every package manager verifies it before unpacking anything. A failure to push a manifest never rolls the release back, because the release is already correct on its own.
-
-The tap and the bucket are each written with their own SSH deploy key, held as `ALERA_HOMEBREW_TAP_DEPLOY_KEY` and `ALERA_SCOOP_BUCKET_DEPLOY_KEY`. A deploy key writes to exactly one repository, so neither can reach the rest of the account the way a personal access token would, and either can be rotated on its own from that repository's settings. The publishing step pins GitHub's SSH host keys by reading them from `https://api.github.com/meta`, whose TLS certificate already authenticates them, rather than accepting whatever key answers first: a runner that trusted a forged host key would push the manifest somewhere else and still report success.
-
-Windows publishes `alera-<version>-windows.zip` next to the `.tar.gz` for these packages, since Chocolatey and Scoop unpack a zip natively. That GitHub asset is separate from the versioned zip `desktop_updater` publishes under R2 for in-app updates.
-
-The macOS cask carries a `postflight` that clears `com.apple.quarantine`. Homebrew quarantines what it downloads, and while the macOS build is not notarized that would leave an app Gatekeeper refuses to open. It is the same action the manual instructions ask users to perform by hand, made explicit in a file anyone can read, and it must be removed once notarization is configured.
-
-Alera never installs an update over an installation a package manager owns: replacing the bundle behind the manager's back leaves its database naming a version that is no longer on disk. The owning manager is detected from the resolved executable path (`lib/src/features/updater/domain/package_install_method.dart`), which resolves the `/Applications` symlink Homebrew leaves behind, so a cask reports its Caskroom. Under Homebrew and Scoop the update UI runs that manager's own upgrade through a detached system shell that waits for Alera to exit and reopens it. Chocolatey is excluded: its upgrade needs elevation, and a UAC prompt raised after Alera has closed gives the user nothing to connect it to, so it shows the command instead, exactly as Linux does.
+The repository retains Windows signing and updater tooling for local or upstream development, but the fork workflow does not read certificate secrets, generate desktop update descriptors, or publish R2 indexes.
 
 ## Android
 
-Mobile release APKs must be signed with the stable upload keystore, because Android refuses to update an installed app when the signer certificate changes. Unlike desktop platforms, signing here is mandatory, not warning-only: the `build_android` job fails fast when the `ALERA_ANDROID_KEYSTORE_BASE64`, `ALERA_ANDROID_KEYSTORE_PASSWORD`, `ALERA_ANDROID_KEY_ALIAS`, or `ALERA_ANDROID_KEY_PASSWORD` secrets are missing. The workflow decodes the keystore into the runner temp directory, writes `mobile/android/key.properties` (gitignored), builds, and verifies every APK with `apksigner verify --print-certs` so the certificate SHA-256 is visible in the job log and can be compared across releases. Local release builds without `key.properties` fall back to the debug key with a Gradle warning, which keeps `flutter run --release` working but produces APKs that cannot update over release-signed installs. The keystore was created once with `keytool -genkey -v -keystore alera-upload.keystore -alias alera -keyalg RSA -keysize 2048 -validity 10000`; keep a backup outside the repository, since losing it means users must uninstall and reinstall forever. The first release signed with this key still requires one final manual reinstall for users coming from debug-signed APKs; updates work in place from that release onward.
+The workflow builds release-mode Android APKs without `android/key.properties`. Gradle therefore uses the project's documented debug-key fallback. No signing or Firebase secrets are read, and no Firebase Dart definitions are injected.
 
-## Desktop update descriptors
+Each mobile release contains universal, ARM64, ARMv7, and x86_64 APKs plus one SHA-256 file per APK. The workflow verifies every APK with `apksigner` before publication.
 
-Desktop updates use only the `desktop_updater` schema v3 layout. Stable and release-candidate clients read `updates/stable/app-archive.json` and `updates/rc/app-archive.json`; each index item points to a versioned platform `release.json`. The descriptor includes the artifact URL, SHA-256, byte length, and installation strategy, and is signed with Ed25519. Release builds embed both the public key and its id through `ALERA_UPDATE_MANIFEST_PUBLIC_KEY` and `ALERA_UPDATE_MANIFEST_PUBLIC_KEY_ID`. Stable update checks reject unsigned, mismatched, or tampered descriptors when `ALERA_SIGNED_RELEASE=true`. The former root schema v2 indexes are deleted during publication and are not parsed by the app.
+Debug signing has an important consequence: Android cannot update an installed application when the new APK uses a different signer. Users must uninstall before crossing signer identities. Firebase push registration is unavailable in these secret-free artifacts.
 
-Stable automatic installation is enabled on every platform except Linux, and does not wait on Developer ID or Authenticode. What makes an update safe to apply is the Ed25519-signed descriptor and the artifact SHA-256 it commits to, both verified before anything is staged; platform signing governs what the operating system shows on first launch, which is a separate problem. Alera selects schema v3 metadata with public `desktop_updater` models, applies its pinned-key signature policy, and delegates download, hash verification, staging, and installation to the package's public API. Linux is excluded from this path because raw `dpkg` and `rpm` transactions do not resolve `libmpv` dependencies safely; the update UI directs users to apt, dnf, or the configured package repository instead.
+## Publication Checks
 
-## Runtime sidecar archive
+Build jobs first upload short-lived workflow artifacts so the publication job can verify the complete set. Before creating a GitHub Release, the publication job checks the expected file counts and validates every SHA-256 file. A failed or incomplete build cannot publish a partial product release.
 
-Remote-host bootstrap uses a separate signed `runtime-archive.json` or `runtime-archive-rc.json` asset published on the GitHub Release. It lists the standalone `alera-runtime-<version>-<platform>-<arch>.tar.gz` sidecar tarballs with SHA-256 and size metadata for macOS, Windows, and Linux on both `x64` and `arm64`. The release workflow signs and verifies this archive with the same Ed25519 key as the desktop update manifest before the draft release is published. Platform code-signing remains warning-only, but runtime archive signing is required for release bootstrap; local development can still use an explicit artifact-path override outside the trusted release path.
+The GitHub token has `contents: write` for release tags and permanent GitHub Releases plus `pull-requests: read` for release planning.
 
-## Emulator Helpers And Video Runtime
+## Excluded Distribution Paths
 
-Desktop builds materialize emulator helpers from `tool/native_helpers/native_helper_assets.json`, while `.dart_tool/alera_native_helpers/cache` keeps verified downloads out of Git. scrcpy Server 4.0 is accepted only when both its download and installed payload match the fixed SHA-256. The iOS helper is not the precompiled npm payload: macOS verifies the serve-sim source revision, Swifter source, dependency lock, Alera patch, and patched source hashes before building an `arm64` helper, matching the Apple Silicon only app. The declared `buildOutput` follows from that single architecture: SwiftPM writes a one-architecture product to `<arch>-apple-macosx/release/`, and only merges into `apple/Products/Release/` when more than one `--arch` is passed, so changing `architectures` means changing `buildOutput` with it. The patch binds every unauthenticated serve-sim endpoint to IPv6 loopback `::1`; the generated bundle manifest records the toolchain-dependent Mach-O SHA-256 and later verification rejects any payload change. Security changes to that derivation can be exercised against a booted simulator with `tool/native_helpers/verify_serve_sim_loopback.dart`, which verifies the health endpoint and listener on `::1` while rejecting IPv4 loopback, wildcard, and LAN access. The installed paths are `resources/alera/emulator/android/scrcpy/4.0/scrcpy-server` on every desktop platform and `resources/alera/emulator/ios/serve-sim/0.1.40/serve-sim-bin` on macOS. The sidecar resolves these paths relative to its own executable under `resources/alera/`.
+The fork workflow does not publish:
 
-Video playback uses the exact media_kit package versions and native source pins in `tool/native_helpers/video_runtime_assets.json`. macOS uses the non-GPL `video-default` libmpv build, Windows verifies every shipped libmpv and ANGLE DLL by SHA-256 before signing, and Linux declares `libmpv` as a system package dependency in both release channels. `third_party/native_helpers/NOTICE.md` and its license files are copied into every emulator helper directory so the notices travel with every release archive and installer.
+- macOS or Linux application artifacts
+- APT or RPM repositories
+- Homebrew, Scoop, or Chocolatey manifests
+- standalone cross-platform runtime sidecar archives
+- signed desktop updater indexes
+- cloud infrastructure or application deployments
 
-Release and desktop build workflows run `tool/native_helpers/verify_desktop_runtime_bundle.dart` after the final bundle is assembled and before signing or packaging. macOS signs nested Mach-O files and frameworks from the inside out, then signs and notarizes the outer app. Windows signs the verified DLL payloads through the existing recursive Authenticode step.
+The related source and packaging tools remain in the repository for local tests and upstream compatibility, but they are not part of the fork's GitHub Actions release path.

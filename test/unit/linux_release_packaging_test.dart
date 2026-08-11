@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
-  test('packages Linux releases as packages plus one tarball', () {
+  test('keeps Linux packaging available outside the fork workflow', () {
     final workflow = File(
       '.github/workflows/release-cut.yml',
     ).readAsStringSync();
@@ -13,31 +13,8 @@ void main() {
       'tool/release/package_linux.sh',
     ).readAsStringSync();
 
-    expect(workflow, contains('- name: Package Linux release'));
-    expect(workflow, isNot(contains('- name: Package RC Linux release')));
-    // The unmanaged install path, for distributions with no package of ours
-    // and for the in-place updates only a directory Alera owns can take.
-    expect(workflow, contains('alera-\${RELEASE_VERSION}-linux-x64.tar.gz'));
-    expect(
-      workflow,
-      contains(
-        'bash tool/release/build_linux_repositories.sh public release-assets',
-      ),
-    );
-    // Auto-install is no longer decided per platform. Which installation may
-    // be replaced is decided at runtime, by whether a package manager owns it
-    // and whether Alera can write to it.
-    expect(workflow, contains('auto_install_enabled=true'));
-    expect(workflow, isNot(contains('if [[ "\$PLATFORM" != "linux" ]]; then')));
-    expect(
-      workflow,
-      isNot(
-        contains(
-          '[[ "\$PLATFORM" == "linux" \\\n'
-          '            && -n "\${ALERA_LINUX_GPG_PRIVATE_KEY_BASE64:-}"',
-        ),
-      ),
-    );
+    expect(workflow, isNot(contains('Package Linux release')));
+    expect(workflow, isNot(contains('linux-x64')));
     expect(
       packageScript,
       isNot(contains('Linux packages are only published for stable releases')),
@@ -269,14 +246,17 @@ class _LinuxRepositoryFixture {
     final fingerprint = _firstFingerprint(listed.stdout.toString());
     expect(fingerprint, isNotEmpty);
 
-    final exported = await Process.run('gpg', <String>[
-      '--homedir',
-      gpgHome.path,
-      '--batch',
-      '--armor',
-      '--export-secret-keys',
-      fingerprint,
-    ], stdoutEncoding: null);
+    final exported = await Process.run(
+        'gpg',
+        <String>[
+          '--homedir',
+          gpgHome.path,
+          '--batch',
+          '--armor',
+          '--export-secret-keys',
+          fingerprint,
+        ],
+        stdoutEncoding: null);
     final privateKey = base64.encode(exported.stdout as List<int>);
 
     final publicDir = Directory(p.join(root.path, 'public'))..createSync();

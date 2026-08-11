@@ -2,7 +2,7 @@
 
 This Cloudflare Worker is the only supported public route to the Alera Cloud Run service. It admits `/v1/*`, `/.well-known/jwks.json`, and `/health`; applies a short mutation burst limit; removes cookies; overwrites the origin-authentication header; and proxies the request without interpreting Alera protocol payloads.
 
-Production deployment is owned by `.github/workflows/cloud-deploy.yml`. Wrangler receives a dedicated `cloud-production` Environment token limited to `Workers Scripts: Edit` on the Leynier account and `Workers Routes: Edit` on `alera.build`. Local `wrangler deploy` is a break-glass operation.
+This fork does not deploy the Worker through GitHub Actions. Production Wrangler operations must run deliberately from a trusted operator environment with a token limited to `Workers Scripts: Edit` and `Workers Routes: Edit` on the intended account and zone.
 
 ## Local Validation
 

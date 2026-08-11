@@ -74,13 +74,11 @@ void main() {
         ),
       );
 
-      final scoop =
-          jsonDecode(rendered['scoop/bucket/alera.json']!)
-              as Map<String, dynamic>;
+      final scoop = jsonDecode(rendered['scoop/bucket/alera.json']!)
+          as Map<String, dynamic>;
       expect(scoop['version'], '1.2.3');
-      final scoop64 =
-          (scoop['architecture'] as Map<String, dynamic>)['64bit']
-              as Map<String, dynamic>;
+      final scoop64 = (scoop['architecture'] as Map<String, dynamic>)['64bit']
+          as Map<String, dynamic>;
       expect(
         scoop64['hash'],
         'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
@@ -96,22 +94,8 @@ void main() {
       );
     });
 
-    // The packages download straight from the GitHub release, so a rename in
-    // the workflow has to fail here rather than turn every install into a 404.
-    test('points at the exact assets the release workflow uploads', () {
-      final workflow = File(
-        '.github/workflows/release-cut.yml',
-      ).readAsStringSync();
-
-      expect(
-        workflow,
-        contains(r'release-assets/alera-${RELEASE_VERSION}-macos.tar.gz'),
-      );
-      expect(
-        workflow,
-        contains(r'release-assets/alera-$env:RELEASE_VERSION-windows.zip'),
-      );
-
+    test('points at the exact assets expected by upstream package manifests',
+        () {
       final rendered = _renderAll();
       // The cask interpolates the version, which is what brew audit expects, so
       // compare against the asset name with the same interpolation applied.
@@ -123,12 +107,10 @@ void main() {
               .replaceFirst('1.2.3', r'#{version}'),
         ),
       );
-      final scoop =
-          jsonDecode(rendered['scoop/bucket/alera.json']!)
-              as Map<String, dynamic>;
-      final scoop64 =
-          (scoop['architecture'] as Map<String, dynamic>)['64bit']
-              as Map<String, dynamic>;
+      final scoop = jsonDecode(rendered['scoop/bucket/alera.json']!)
+          as Map<String, dynamic>;
+      final scoop64 = (scoop['architecture'] as Map<String, dynamic>)['64bit']
+          as Map<String, dynamic>;
       expect(
         scoop64['url'],
         'https://github.com/leynier/alera/releases/download/v1.2.3/'
@@ -140,29 +122,26 @@ void main() {
       );
     });
 
-    test('publishes the windows updater through the schema 3 manifest', () {
+    test('fork release workflow omits package-manager and updater publishing',
+        () {
       final workflow = File(
         '.github/workflows/release-cut.yml',
       ).readAsStringSync();
 
-      expect(workflow, contains('dart run desktop_updater:release publish'));
-      expect(workflow, contains(r'pages/updates/$CHANNEL/app-archive.json'));
-      expect(
-        workflow,
-        isNot(contains(r'if [[ "$name" == *-windows.zip ]]; then')),
-      );
+      expect(workflow, isNot(contains('desktop_updater:release publish')));
+      expect(workflow, isNot(contains('publish_packages:')));
+      expect(workflow, isNot(contains('publish_chocolatey:')));
     });
 
-    test('declares only the architectures CI actually builds', () {
+    test('upstream manifests declare their supported architectures', () {
       final rendered = _renderAll();
 
       expect(
         rendered['homebrew/Casks/alera.rb'],
         contains('depends_on arch: :arm64'),
       );
-      final scoop =
-          jsonDecode(rendered['scoop/bucket/alera.json']!)
-              as Map<String, dynamic>;
+      final scoop = jsonDecode(rendered['scoop/bucket/alera.json']!)
+          as Map<String, dynamic>;
       expect((scoop['architecture'] as Map<String, dynamic>).keys, <String>[
         '64bit',
       ]);

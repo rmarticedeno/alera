@@ -412,23 +412,9 @@ Android test devices must have compatible Google Play Services. A force-stop fro
 
 ## Android Release Configuration
 
-The release workflow already requires these GitHub repository secrets for stable APK signing:
+The fork release workflow is deliberately secret-free. It does not create `android/key.properties` or pass Firebase values, so Gradle signs release-mode APKs with the repository's debug-key fallback and Firebase push registration remains unavailable in those artifacts.
 
-- `ALERA_ANDROID_KEYSTORE_BASE64`
-- `ALERA_ANDROID_KEYSTORE_PASSWORD`
-- `ALERA_ANDROID_KEY_ALIAS`
-- `ALERA_ANDROID_KEY_PASSWORD`
-
-Keep a protected backup of the upload keystore outside GitHub. Losing it prevents existing users from installing updates signed by a replacement key.
-
-The release workflow requires these GitHub repository variables and passes them as `--dart-define` values to both Android build commands:
-
-- `ALERA_FIREBASE_API_KEY`
-- `ALERA_FIREBASE_APP_ID`
-- `ALERA_FIREBASE_MESSAGING_SENDER_ID`
-- `ALERA_FIREBASE_PROJECT_ID`
-
-Firebase client identifiers are not private credentials, but they remain out of source to preserve the repository's current environment boundary. The workflow fails before building an APK when any required variable is missing because an APK without this configuration cannot register for Alera FCM delivery.
+Debug-signed APKs cannot update an installation signed by a different key. Users must uninstall the previous build before installing an artifact whose signer changed. Production distribution with durable in-place updates requires a separately approved signing design and a protected long-lived keystore outside the repository.
 
 ## Android End-To-End Verification
 

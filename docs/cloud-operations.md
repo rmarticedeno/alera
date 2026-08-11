@@ -13,19 +13,11 @@ This runbook deploys and operates the account and push service described in [`cl
 
 Use a dedicated versioned Google Cloud Storage bucket for OpenTofu state. State is not a secret delivery mechanism and access must still be restricted.
 
-## Production CD
+## Production Deployment
 
-The normal production path is `.github/workflows/cloud-deploy.yml`. A merge into `main` that changes `cloud/`, `edge/`, `infra/production/`, `tool/cloud/`, or the workflow runs the full backend, PostgreSQL, container, Edge, and OpenTofu gates before deploying. The workflow builds and publishes a `linux/amd64` image, resolves its immutable digest, applies the guarded OpenTofu plan, deploys the Worker, and verifies public health, public JWKS, and the direct-origin JWKS rejection.
+This fork does not deploy production services through GitHub Actions. The retained `cloud.yml` workflow runs backend, Edge, and infrastructure validation only. Production changes must be applied deliberately from a trusted operator environment using the guarded OpenTofu, Cloud Run, and Wrangler procedures in this runbook.
 
-The deployment job uses the `cloud-production` GitHub Environment. Google authentication is keyless through the WIF bootstrap under `infra/bootstrap/github`; Cloudflare uses independent DNS and Worker tokens. The environment is limited to `main` and has no manual approval. A push event is authorized only when its SHA is the merge commit of a pull request merged into `main`; `workflow_dispatch` from `main` is the explicit operational exception.
-
-Manual runs support:
-
-- `plan`: build and publish an immutable candidate image, then produce and validate the production plan without applying it.
-- `deploy`: run the same path used after an authorized merge.
-- `rollback`: restore an explicitly supplied full image digest and Worker version id.
-
-If verification fails after apply, the workflow rolls the Worker back to the version captured before deployment, reapplies OpenTofu with the previous Cloud Run digest, and repeats the probes. Structural infrastructure changes are not automatically undone. The failed run summary preserves the identifiers required for a manual rollback.
+Keep Google Cloud and Cloudflare credentials outside the repository and GitHub Actions. Record the target commit, immutable image digest, OpenTofu plan, Worker version, verification results, and rollback identifiers for every production operation.
 
 ## Local Backend
 
@@ -55,9 +47,9 @@ Create a GitHub OAuth App, not a GitHub App. Use `https://alera.build` as its ho
 
 Add both client ids to `terraform.tfvars`. Add both client secrets directly to their Secret Manager containers after bootstrap.
 
-## Break-Glass Local Deployment
+## Operator Deployment
 
-Local production deployment is reserved for recovery when GitHub Actions or its federated identity is unavailable. Record the reason, use the same immutable inputs, run the plan guard, and restore GitHub CD as soon as possible. Do not create a service-account key as a workaround.
+Production deployment runs from a trusted operator environment because the fork has no deployment workflow. Record the reason and target commit, use immutable inputs, run the plan guard, and preserve the rollback identifiers. Do not create a service-account key as a shortcut.
 
 ### Infrastructure Bootstrap
 

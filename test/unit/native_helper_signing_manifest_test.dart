@@ -72,13 +72,10 @@ void main() {
     expect(fixture.generatedSha256, digest);
   });
 
-  test('refreshes helper hashes before sealing and re-verifies the app', () {
+  test('refreshes helper hashes before sealing the macOS app', () {
     final macosSigning = File(
       'tool/release/sign_macos.sh',
     ).readAsStringSync().replaceAll('\r\n', '\n');
-    final release = File(
-      '.github/workflows/release-cut.yml',
-    ).readAsStringSync();
     final helperSigning = macosSigning.indexOf(
       'sign_macho_files "\$app_path/Contents/Resources/alera"',
     );
@@ -93,10 +90,6 @@ void main() {
     expect(helperSigning, greaterThanOrEqualTo(0));
     expect(manifestRefresh, greaterThan(helperSigning));
     expect(appSigning, greaterThan(manifestRefresh));
-    expect(
-      release.lastIndexOf('verify_desktop_runtime_bundle.dart'),
-      greaterThan(release.indexOf('sign_macos.sh')),
-    );
   });
 }
 

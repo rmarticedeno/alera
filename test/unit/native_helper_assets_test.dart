@@ -90,13 +90,11 @@ void main() {
       expect(notice, contains('IPv6 loopback'));
       expect(notice, contains('Swifter'));
 
-      final rawManifest =
-          jsonDecode(
-                File(
-                  'tool/native_helpers/native_helper_assets.json',
-                ).readAsStringSync(),
-              )
-              as Map<String, Object?>;
+      final rawManifest = jsonDecode(
+        File(
+          'tool/native_helpers/native_helper_assets.json',
+        ).readAsStringSync(),
+      ) as Map<String, Object?>;
       final rawServeSim = (rawManifest['assets']! as List<Object?>)
           .cast<Map<String, Object?>>()
           .singleWhere((asset) => asset['id'] == 'serve-sim');
@@ -278,13 +276,11 @@ void main() {
 
   group('video runtime packaging', () {
     test('pins non-GPL media runtimes and platform build dependencies', () {
-      final manifest =
-          jsonDecode(
-                File(
-                  'tool/native_helpers/video_runtime_assets.json',
-                ).readAsStringSync(),
-              )
-              as Map<String, Object?>;
+      final manifest = jsonDecode(
+        File(
+          'tool/native_helpers/video_runtime_assets.json',
+        ).readAsStringSync(),
+      ) as Map<String, Object?>;
       final macos = manifest['macos']! as Map<String, Object?>;
       final windows = manifest['windows']! as Map<String, Object?>;
 
@@ -295,8 +291,8 @@ void main() {
         '84d2ad98e046e82c6dc34d8547d76c2afeaee89c0f53032773be8985c95536d6',
       );
       expect(windows['gplEnabled'], isFalse);
-      final windowsFiles = (windows['requiredFiles']! as List)
-          .cast<Map<String, Object?>>();
+      final windowsFiles =
+          (windows['requiredFiles']! as List).cast<Map<String, Object?>>();
       expect(
         windowsFiles.singleWhere(
           (file) => file['relativePath'] == 'libmpv-2.dll',
@@ -373,7 +369,7 @@ void main() {
   });
 
   test(
-    'desktop build and release hooks install and verify native runtimes',
+    'platform hooks install helpers and Windows releases verify runtimes',
     () {
       final linux = File('linux/CMakeLists.txt').readAsStringSync();
       final windows = File('windows/CMakeLists.txt').readAsStringSync();
@@ -401,25 +397,15 @@ void main() {
       );
       expect(macos, contains(r'$OUTPUT_DIR/emulator'));
 
-      final desktopBuild = File(
-        '.github/workflows/desktop-build.yml',
-      ).readAsStringSync();
       final release = File(
         '.github/workflows/release-cut.yml',
       ).readAsStringSync();
       final runtimePackager = File(
         'tool/release/package_runtime_sidecars.dart',
       ).readAsStringSync();
-      expect(desktopBuild, contains('verify_desktop_runtime_bundle.dart'));
       expect(release, contains('verify_desktop_runtime_bundle.dart'));
-      expect(
-        release,
-        contains('tool/native_helpers/verify_native_helper_bundle.dart'),
-      );
-      expect(
-        release,
-        contains(r'cp -R "$runtime_root/emulator" "$input_root/emulator"'),
-      );
+      expect(release, contains('--platform windows'));
+      expect(release, isNot(contains('build_runtime_cross:')));
       expect(
         runtimePackager,
         contains("'emulatorHelpers': 'emulator/manifest.json'"),
